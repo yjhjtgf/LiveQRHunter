@@ -41,7 +41,7 @@ find_package(Qt6 COMPONENTS Widgets Concurrent REQUIRED)
 
 include_directories(src/Core)
 
-add_executable(${PROJECT_NAME}
+add_executable(${PROJECT_NAME} WIN32
     src/UI/main.cpp
     src/UI/StreamQRScanner.cpp
     src/UI/StreamQRScanner.h

@@ -1,6 +1,6 @@
 #include <QApplication>
 #include <QWidget>
-#include <QtConcurrent>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QComboBox>

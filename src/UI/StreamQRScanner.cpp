@@ -83,6 +83,12 @@ auto StreamQRScanner::init() -> bool
         return false;
     }
     pAVCodecContext = avcodec_alloc_context3(decoder);
+    if (!pAVCodecContext)
+    {
+        Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法分配解码上下文"));
+        cleanup();
+        return false;
+    }
     avcodec_parameters_to_context(pAVCodecContext, videoStream->codecpar);
     if (avcodec_open2(pAVCodecContext, decoder, NULL) < 0)
     {
@@ -94,8 +100,26 @@ auto StreamQRScanner::init() -> bool
     pSwsContext = sws_getContext(
         pAVCodecContext->width, pAVCodecContext->height, pAVCodecContext->pix_fmt,
         videoStreamWidth, videoStreamHeight, AV_PIX_FMT_BGR24, SWS_BILINEAR, NULL, NULL, NULL);
+    if (!pSwsContext)
+    {
+        Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法创建像素格式转换上下文"));
+        cleanup();
+        return false;
+    }
     pAVPacket = av_packet_alloc();
+    if (!pAVPacket)
+    {
+        Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法分配数据包"));
+        cleanup();
+        return false;
+    }
     pAVFrame = av_frame_alloc();
+    if (!pAVFrame)
+    {
+        Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法分配帧缓冲"));
+        cleanup();
+        return false;
+    }
     return true;
 }
 
@@ -156,7 +180,7 @@ void StreamQRScanner::processStream()
             sws_scale(pSwsContext, pAVFrame->data, pAVFrame->linesize, 0, pAVFrame->height,
                       dstData, dstLinesize);
 
-            threadPool.tryStart([img = std::move(img), platform = m_streamPlatform, room = m_roomID, this]() mutable {
+            threadPool.start([img = std::move(img), this]() mutable {
                 thread_local QRScanner qrScanners;
                 std::string str;
                 try
@@ -167,19 +191,15 @@ void StreamQRScanner::processStream()
                 {
                     return;
                 }
-                if (str.empty())
+                std::string fingerprint;
+                if (!str.empty())
                 {
-                    QMetaObject::invokeMethod(this, [this]() {
-                        onDecoded(QString(), QString());
-                    }, Qt::QueuedConnection);
-                    return;
+                    fingerprint = str.substr(0, (std::min)(str.size(), size_t(50)));
                 }
-                std::string qrFingerprint = str.substr(0, (std::min)(str.size(), size_t(50)));
-                // Post result back to scanner thread for safe member updates
-                QMetaObject::invokeMethod(this, [this, str = std::move(str), qrFingerprint = std::move(qrFingerprint)]() mutable {
-                    onDecoded(QString::fromStdString(str), QString::fromStdString(qrFingerprint));
-                }, Qt::QueuedConnection);
+                std::lock_guard<std::mutex> lock(m_decodedResultsMutex);
+                m_decodedResults.push_back({ std::move(str), std::move(fingerprint) });
             });
+            processDecodedResults();
 
             frameCount++;
             if (frameCount % 30 == 0)
@@ -191,6 +211,19 @@ void StreamQRScanner::processStream()
         }
         av_frame_unref(pAVFrame);
         av_packet_unref(pAVPacket);
+    }
+}
+
+void StreamQRScanner::processDecodedResults()
+{
+    std::deque<DecodeResult> pending;
+    {
+        std::lock_guard<std::mutex> lock(m_decodedResultsMutex);
+        pending.swap(m_decodedResults);
+    }
+    for (auto& result : pending)
+    {
+        onDecoded(std::move(result.content), std::move(result.fingerprint));
     }
 }
 

@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QWidget>
+#include <QtConcurrent>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QComboBox>
@@ -313,20 +314,30 @@ int main(int argc, char* argv[])
                 }
                 int idx = platformCombo->currentIndex();
                 statusLabel->setText(QString::fromUtf8("获取直播流..."));
-                QApplication::processEvents();
-                auto info = GetLiveInfo(static_cast<LivePlatform>(idx), roomId.toStdString());
-                if (info.status != LiveStreamStatus::Normal)
-                {
-                    statusLabel->setText(QString::fromUtf8("获取直播流失败"));
-                    return;
-                }
-                statusLabel->setText(QString::fromUtf8("连接中..."));
-                QApplication::processEvents();
-                scanner.setUrl(info.link);
-                scanner.setStreamContext(idx == 0 ? "Douyin" : "Bilibili", roomId.toStdString());
-                scanner.start();
-                startBtn->setText(QString::fromUtf8("■"));
-                monitoring = true;
+                // perform network call in background, then start scanner on UI thread
+                QString roomIdCopy = roomId;
+                int platformIdx = idx;
+                QWidget* wPtr = &w;
+                QLabel* statusPtr = statusLabel;
+                StreamQRScanner* scannerPtr = &scanner;
+                QPushButton* startBtnPtr = startBtn;
+                bool* monitoringPtr = &monitoring;
+                QtConcurrent::run([platformIdx, roomIdCopy, wPtr, statusPtr, scannerPtr, startBtnPtr, monitoringPtr]() {
+                    auto info = GetLiveInfo(static_cast<LivePlatform>(platformIdx), roomIdCopy.toStdString());
+                    QMetaObject::invokeMethod(wPtr, [info, platformIdx, roomIdCopy, statusPtr, scannerPtr, startBtnPtr, monitoringPtr]() mutable {
+                        if (info.status != LiveStreamStatus::Normal)
+                        {
+                            statusPtr->setText(QString::fromUtf8("获取直播流失败"));
+                            return;
+                        }
+                        statusPtr->setText(QString::fromUtf8("连接中..."));
+                        scannerPtr->setUrl(info.link);
+                        scannerPtr->setStreamContext(platformIdx == 0 ? "Douyin" : "Bilibili", roomIdCopy.toStdString());
+                        scannerPtr->start();
+                        startBtnPtr->setText(QString::fromUtf8("■"));
+                        *monitoringPtr = true;
+                    }, Qt::QueuedConnection);
+                });
             }
             else
             {

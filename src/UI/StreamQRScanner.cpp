@@ -50,11 +50,13 @@ auto StreamQRScanner::init() -> bool
     if (avformat_open_input(&pAVFormatContext, streamUrl.c_str(), NULL, &pAvdictionary) != 0)
     {
         Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法打开直播流"));
+        cleanup();
         return false;
     }
     if (avformat_find_stream_info(pAVFormatContext, NULL) < 0)
     {
         Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法获取流信息"));
+        cleanup();
         return false;
     }
     AVStream* videoStream = nullptr;
@@ -69,6 +71,7 @@ auto StreamQRScanner::init() -> bool
     if (!videoStream)
     {
         Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无视频流"));
+        cleanup();
         return false;
     }
     videoStreamIndex = videoStream->index;
@@ -76,6 +79,7 @@ auto StreamQRScanner::init() -> bool
     if (!decoder)
     {
         Q_EMIT statusChanged(QString::fromUtf8("连接失败: 找不到解码器"));
+        cleanup();
         return false;
     }
     pAVCodecContext = avcodec_alloc_context3(decoder);
@@ -83,6 +87,7 @@ auto StreamQRScanner::init() -> bool
     if (avcodec_open2(pAVCodecContext, decoder, NULL) < 0)
     {
         Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法打开解码器"));
+        cleanup();
         return false;
     }
     setStreamHW();
@@ -151,7 +156,7 @@ void StreamQRScanner::processStream()
             sws_scale(pSwsContext, pAVFrame->data, pAVFrame->linesize, 0, pAVFrame->height,
                       dstData, dstLinesize);
 
-            threadPool.tryStart([&, img = std::move(img)]() {
+            threadPool.tryStart([img = std::move(img), platform = m_streamPlatform, room = m_roomID, this]() mutable {
                 thread_local QRScanner qrScanners;
                 std::string str;
                 try
@@ -164,25 +169,16 @@ void StreamQRScanner::processStream()
                 }
                 if (str.empty())
                 {
-                    if (m_hasActiveQR)
-                    {
-                        m_hasActiveQR = false;
-                        QRCodeInfo empty;
-                        empty.platform = m_streamPlatform;
-                        empty.roomID = m_roomID;
-                        empty.timestamp = QDateTime::currentMSecsSinceEpoch();
-                        Q_EMIT qrCodeDetected(empty);
-                    }
+                    QMetaObject::invokeMethod(this, [this]() {
+                        onDecoded(QString(), QString());
+                    }, Qt::QueuedConnection);
                     return;
                 }
                 std::string qrFingerprint = str.substr(0, (std::min)(str.size(), size_t(50)));
-                if (qrFingerprint != m_lastQRTicket)
-                {
-                    m_lastQRTicket = qrFingerprint;
-                    m_hasActiveQR = true;
-                    m_qrCount++;
-                    Q_EMIT qrCodeDetected(buildInfo(str, m_streamPlatform, m_roomID));
-                }
+                // Post result back to scanner thread for safe member updates
+                QMetaObject::invokeMethod(this, [this, str = std::move(str), qrFingerprint = std::move(qrFingerprint)]() mutable {
+                    onDecoded(QString::fromStdString(str), QString::fromStdString(qrFingerprint));
+                }, Qt::QueuedConnection);
             });
 
             frameCount++;
@@ -212,6 +208,31 @@ void StreamQRScanner::cleanup()
     pAvdictionary = nullptr;
     pAVFrame = nullptr;
     pAVPacket = nullptr;
+}
+
+void StreamQRScanner::onDecoded(const QString& content, const QString& fingerprint)
+{
+    if (content.isEmpty())
+    {
+        if (m_hasActiveQR)
+        {
+            m_hasActiveQR = false;
+            QRCodeInfo empty;
+            empty.platform = m_streamPlatform;
+            empty.roomID = m_roomID;
+            empty.timestamp = QDateTime::currentMSecsSinceEpoch();
+            Q_EMIT qrCodeDetected(empty);
+        }
+        return;
+    }
+    const std::string fp = fingerprint.toStdString();
+    if (fp != m_lastQRTicket)
+    {
+        m_lastQRTicket = fp;
+        m_hasActiveQR = true;
+        m_qrCount++;
+        Q_EMIT qrCodeDetected(buildInfo(content.toStdString(), m_streamPlatform, m_roomID));
+    }
 }
 
 void StreamQRScanner::stop()

@@ -42,6 +42,9 @@ private:
     void setStreamHW();
     void cleanup();
 
+    Q_SLOTS:
+    void onDecoded(const QString& content, const QString& fingerprint);
+
     std::string streamUrl{};
     AVDictionary* pAvdictionary{};
     AVFormatContext* pAVFormatContext{};

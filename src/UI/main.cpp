@@ -399,6 +399,11 @@ int main(int argc, char* argv[])
 
     int ret = a.exec();
 
+    if (scanner.isRunning())
+    {
+        scanner.stop();
+        scanner.wait();
+    }
     if (liveInfoFuture.isRunning())
     {
         liveInfoFuture.waitForFinished();

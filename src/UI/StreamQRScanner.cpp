@@ -50,11 +50,13 @@ auto StreamQRScanner::init() -> bool
     if (avformat_open_input(&pAVFormatContext, streamUrl.c_str(), NULL, &pAvdictionary) != 0)
     {
         Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法打开直播流"));
+        cleanup();
         return false;
     }
     if (avformat_find_stream_info(pAVFormatContext, NULL) < 0)
     {
         Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法获取流信息"));
+        cleanup();
         return false;
     }
     AVStream* videoStream = nullptr;
@@ -69,6 +71,7 @@ auto StreamQRScanner::init() -> bool
     if (!videoStream)
     {
         Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无视频流"));
+        cleanup();
         return false;
     }
     videoStreamIndex = videoStream->index;
@@ -76,21 +79,47 @@ auto StreamQRScanner::init() -> bool
     if (!decoder)
     {
         Q_EMIT statusChanged(QString::fromUtf8("连接失败: 找不到解码器"));
+        cleanup();
         return false;
     }
     pAVCodecContext = avcodec_alloc_context3(decoder);
+    if (!pAVCodecContext)
+    {
+        Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法分配解码上下文"));
+        cleanup();
+        return false;
+    }
     avcodec_parameters_to_context(pAVCodecContext, videoStream->codecpar);
     if (avcodec_open2(pAVCodecContext, decoder, NULL) < 0)
     {
         Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法打开解码器"));
+        cleanup();
         return false;
     }
     setStreamHW();
     pSwsContext = sws_getContext(
         pAVCodecContext->width, pAVCodecContext->height, pAVCodecContext->pix_fmt,
         videoStreamWidth, videoStreamHeight, AV_PIX_FMT_BGR24, SWS_BILINEAR, NULL, NULL, NULL);
+    if (!pSwsContext)
+    {
+        Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法创建像素格式转换上下文"));
+        cleanup();
+        return false;
+    }
     pAVPacket = av_packet_alloc();
+    if (!pAVPacket)
+    {
+        Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法分配数据包"));
+        cleanup();
+        return false;
+    }
     pAVFrame = av_frame_alloc();
+    if (!pAVFrame)
+    {
+        Q_EMIT statusChanged(QString::fromUtf8("连接失败: 无法分配帧缓冲"));
+        cleanup();
+        return false;
+    }
     return true;
 }
 
@@ -151,7 +180,7 @@ void StreamQRScanner::processStream()
             sws_scale(pSwsContext, pAVFrame->data, pAVFrame->linesize, 0, pAVFrame->height,
                       dstData, dstLinesize);
 
-            threadPool.tryStart([&, img = std::move(img)]() {
+            if (threadPool.tryStart([img = std::move(img), this]() mutable {
                 thread_local QRScanner qrScanners;
                 std::string str;
                 try
@@ -162,28 +191,18 @@ void StreamQRScanner::processStream()
                 {
                     return;
                 }
-                if (str.empty())
+                std::string fingerprint;
+                if (!str.empty())
                 {
-                    if (m_hasActiveQR)
-                    {
-                        m_hasActiveQR = false;
-                        QRCodeInfo empty;
-                        empty.platform = m_streamPlatform;
-                        empty.roomID = m_roomID;
-                        empty.timestamp = QDateTime::currentMSecsSinceEpoch();
-                        Q_EMIT qrCodeDetected(empty);
-                    }
-                    return;
+                    fingerprint = str.substr(0, (std::min)(str.size(), size_t(50)));
                 }
-                std::string qrFingerprint = str.substr(0, (std::min)(str.size(), size_t(50)));
-                if (qrFingerprint != m_lastQRTicket)
-                {
-                    m_lastQRTicket = qrFingerprint;
-                    m_hasActiveQR = true;
-                    m_qrCount++;
-                    Q_EMIT qrCodeDetected(buildInfo(str, m_streamPlatform, m_roomID));
-                }
-            });
+                std::lock_guard<std::mutex> lock(m_decodedResultsMutex);
+                m_decodedResults.push_back({ std::move(str), std::move(fingerprint) });
+            }))
+            {
+                // queued successfully
+            }
+            processDecodedResults();
 
             frameCount++;
             if (frameCount % 30 == 0)
@@ -195,6 +214,21 @@ void StreamQRScanner::processStream()
         }
         av_frame_unref(pAVFrame);
         av_packet_unref(pAVPacket);
+    }
+    threadPool.waitForDone();
+    processDecodedResults();
+}
+
+void StreamQRScanner::processDecodedResults()
+{
+    std::deque<DecodeResult> pending;
+    {
+        std::lock_guard<std::mutex> lock(m_decodedResultsMutex);
+        pending.swap(m_decodedResults);
+    }
+    for (auto& result : pending)
+    {
+        onDecoded(std::move(result.content), std::move(result.fingerprint));
     }
 }
 
@@ -212,6 +246,30 @@ void StreamQRScanner::cleanup()
     pAvdictionary = nullptr;
     pAVFrame = nullptr;
     pAVPacket = nullptr;
+}
+
+void StreamQRScanner::onDecoded(std::string content, std::string fingerprint)
+{
+    if (content.empty())
+    {
+        if (m_hasActiveQR)
+        {
+            m_hasActiveQR = false;
+            QRCodeInfo empty;
+            empty.platform = m_streamPlatform;
+            empty.roomID = m_roomID;
+            empty.timestamp = QDateTime::currentMSecsSinceEpoch();
+            Q_EMIT qrCodeDetected(empty);
+        }
+        return;
+    }
+    if (fingerprint != m_lastQRTicket)
+    {
+        m_lastQRTicket = std::move(fingerprint);
+        m_hasActiveQR = true;
+        m_qrCount++;
+        Q_EMIT qrCodeDetected(buildInfo(std::move(content), m_streamPlatform, m_roomID));
+    }
 }
 
 void StreamQRScanner::stop()

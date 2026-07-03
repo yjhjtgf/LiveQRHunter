@@ -1,6 +1,5 @@
 ﻿#include "LiveStreamLink.h"
 
-#include <format>
 #include <fstream>
 #include <regex>
 #include <random>
@@ -17,7 +16,10 @@ LiveBili::LiveBili(const std::string& roomID) :
 LiveStreamInfo LiveBili::GetLiveStreamInfo()
 {
     // 获取房间初始化信息
-    auto r = cpr::Get(cpr::Url{ std::format("{}?id={}", api::live::bili::room_init.c_str(), roomID) });
+    constexpr auto room_init_with_query = api::live::bili::room_init + compile_string{ "?id=" };
+    std::string requestUrl = std::string(room_init_with_query.c_str()) + roomID;
+    auto r = cpr::Get(cpr::Url{ requestUrl },
+                      cpr::Timeout{10000});
     if (r.error || r.status_code != 200 || r.text.empty())
     {
         return { LiveStreamStatus::Error, "" };
@@ -106,7 +108,8 @@ std::string LiveBili::GetLinkByRealRoomID(const std::string& realRoomID)
 
 std::string LiveBili::GetStreamUrl(const cpr::Parameters param)
 {
-    auto r = cpr::Get(cpr::Url{ api::live::bili::v2_play_info }, param);
+    auto r = cpr::Get(cpr::Url{ api::live::bili::v2_play_info }, param,
+                      cpr::Timeout{10000});
     if (r.error || r.status_code != 200 || r.text.empty())
     {
         return "";
@@ -162,7 +165,8 @@ LiveStreamInfo LiveDouyin::GetLiveStreamInfo()
             "browser_version=139.0.0.0&is_need_double_stream=false&web_rid=" +
             m_roomID;
         const std::string url = std::string(api::live::douyin::room) + params;
-        auto response = cpr::Get(cpr::Url{ url }, headers);
+        auto response = cpr::Get(cpr::Url{ url }, headers,
+                                  cpr::Timeout{10000});
         if (response.error || response.status_code != 200 || response.text.empty())
         {
             return { LiveStreamStatus::Error, "" };

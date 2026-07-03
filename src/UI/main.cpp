@@ -1,5 +1,7 @@
 #include <QApplication>
+#include <QFuture>
 #include <QWidget>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QComboBox>
@@ -10,7 +12,9 @@
 #include <QDateTime>
 #include <QGroupBox>
 #include <QMenu>
+#include <QPointer>
 
+#include <atomic>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -293,49 +297,86 @@ int main(int argc, char* argv[])
     });
 
     // 开始/停止
-    bool monitoring = false;
+    std::atomic<bool> monitoring{ false };
+    std::atomic<bool> requestPending{ false };
+    QFuture<void> liveInfoFuture;
     QObject::connect(startBtn, &QPushButton::clicked, [&]() {
         try
         {
-            if (!monitoring)
+            if (requestPending.load())
             {
-                QString roomId = roomCombo->currentText().trimmed();
-                if (roomId.isEmpty())
-                {
-                    statusLabel->setText(QString::fromUtf8("请输入房间号"));
-                    return;
-                }
-                // 保存房间号到历史 (去重)
-                if (roomCombo->findText(roomId) < 0)
-                {
-                    roomCombo->insertItem(0, roomId);
-                    saveRoomHistory(roomCombo, historyData);
-                }
-                int idx = platformCombo->currentIndex();
-                statusLabel->setText(QString::fromUtf8("获取直播流..."));
-                QApplication::processEvents();
-                auto info = GetLiveInfo(static_cast<LivePlatform>(idx), roomId.toStdString());
-                if (info.status != LiveStreamStatus::Normal)
-                {
-                    statusLabel->setText(QString::fromUtf8("获取直播流失败"));
-                    return;
-                }
-                statusLabel->setText(QString::fromUtf8("连接中..."));
-                QApplication::processEvents();
-                scanner.setUrl(info.link);
-                scanner.setStreamContext(idx == 0 ? "Douyin" : "Bilibili", roomId.toStdString());
-                scanner.start();
-                startBtn->setText(QString::fromUtf8("■"));
-                monitoring = true;
+                return;
             }
-            else
+            if (monitoring.load())
             {
                 scanner.stop();
                 scanner.wait();
                 startBtn->setText(QString::fromUtf8("▶"));
                 statusLabel->setText(QString::fromUtf8("已停止"));
-                monitoring = false;
+                monitoring.store(false);
+                return;
             }
+            QString roomId = roomCombo->currentText().trimmed();
+            if (roomId.isEmpty())
+            {
+                statusLabel->setText(QString::fromUtf8("请输入房间号"));
+                return;
+            }
+            // 保存房间号到历史 (去重)
+            if (roomCombo->findText(roomId) < 0)
+            {
+                roomCombo->insertItem(0, roomId);
+                saveRoomHistory(roomCombo, historyData);
+            }
+            int idx = platformCombo->currentIndex();
+            statusLabel->setText(QString::fromUtf8("获取直播流..."));
+            requestPending.store(true);
+            startBtn->setEnabled(false);
+
+            QString roomIdCopy = roomId;
+            int platformIdx = idx;
+            QPointer<QLabel> statusPtr = statusLabel;
+            QPointer<QPushButton> startBtnPtr = startBtn;
+            QPointer<StreamQRScanner> scannerPtr = &scanner;
+            auto monitoringPtr = &monitoring;
+            auto requestPendingPtr = &requestPending;
+            liveInfoFuture = QtConcurrent::run([platformIdx, roomIdCopy, statusPtr, startBtnPtr, scannerPtr, monitoringPtr, requestPendingPtr]() {
+                auto info = GetLiveInfo(static_cast<LivePlatform>(platformIdx), roomIdCopy.toStdString());
+                if (!qApp)
+                {
+                    requestPendingPtr->store(false);
+                    return;
+                }
+                QMetaObject::invokeMethod(qApp, [info, platformIdx, roomIdCopy, statusPtr, startBtnPtr, scannerPtr, monitoringPtr, requestPendingPtr]() mutable {
+                    if (!statusPtr || !startBtnPtr)
+                    {
+                        requestPendingPtr->store(false);
+                        return;
+                    }
+                    if (info.status != LiveStreamStatus::Normal)
+                    {
+                        statusPtr->setText(QString::fromUtf8("获取直播流失败"));
+                        startBtnPtr->setEnabled(true);
+                        requestPendingPtr->store(false);
+                        return;
+                    }
+                    if (!scannerPtr)
+                    {
+                        statusPtr->setText(QString::fromUtf8("获取直播流失败"));
+                        startBtnPtr->setEnabled(true);
+                        requestPendingPtr->store(false);
+                        return;
+                    }
+                    statusPtr->setText(QString::fromUtf8("连接中..."));
+                    scannerPtr->setUrl(info.link);
+                    scannerPtr->setStreamContext(platformIdx == 0 ? "Douyin" : "Bilibili", roomIdCopy.toStdString());
+                    scannerPtr->start();
+                    startBtnPtr->setText(QString::fromUtf8("■"));
+                    startBtnPtr->setEnabled(true);
+                    monitoringPtr->store(true);
+                    requestPendingPtr->store(false);
+                }, Qt::QueuedConnection);
+            });
         }
         catch (const std::exception& e)
         {
@@ -357,6 +398,16 @@ int main(int argc, char* argv[])
     w.show();
 
     int ret = a.exec();
+
+    if (scanner.isRunning())
+    {
+        scanner.stop();
+        scanner.wait();
+    }
+    if (liveInfoFuture.isRunning())
+    {
+        liveInfoFuture.waitForFinished();
+    }
 
     saveConfig(&w, platformCombo->currentIndex(), pinBtn->isChecked());
 

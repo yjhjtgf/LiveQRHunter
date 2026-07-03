@@ -1,8 +1,10 @@
 #pragma once
 
 #include <atomic>
-#include <string>
+#include <deque>
 #include <map>
+#include <mutex>
+#include <string>
 
 extern "C"
 {
@@ -38,9 +40,18 @@ Q_SIGNALS:
     void statusChanged(const QString status);
 
 private:
+    struct DecodeResult
+    {
+        std::string content;
+        std::string fingerprint;
+    };
+
     void processStream();
+    void processDecodedResults();
     void setStreamHW();
     void cleanup();
+
+    void onDecoded(std::string content, std::string fingerprint);
 
     std::string streamUrl{};
     AVDictionary* pAvdictionary{};
@@ -60,4 +71,7 @@ private:
     std::string m_lastQRTicket;
     bool m_hasActiveQR{ false };
     int m_qrCount{ 0 };
+
+    std::mutex m_decodedResultsMutex;
+    std::deque<DecodeResult> m_decodedResults;
 };

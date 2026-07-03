@@ -37,11 +37,11 @@ find_package(cpr CONFIG REQUIRED)
 find_package(OpenCV REQUIRED opencv_world)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
-find_package(Qt6 COMPONENTS Widgets REQUIRED)
+find_package(Qt6 COMPONENTS Widgets Concurrent REQUIRED)
 
 include_directories(src/Core)
 
-add_executable(${PROJECT_NAME}
+add_executable(${PROJECT_NAME} WIN32
     src/UI/main.cpp
     src/UI/StreamQRScanner.cpp
     src/UI/StreamQRScanner.h
@@ -61,6 +61,7 @@ set(PROJECT_LIBRARIES
     Normaliz
     Qt6::Core
     Qt6::Widgets
+    Qt6::Concurrent
     cpr::cpr
     QR_Code_generator
     nlohmann_json::nlohmann_json

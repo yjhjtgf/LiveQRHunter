@@ -301,8 +301,17 @@ int main(int argc, char* argv[])
     QObject::connect(startBtn, &QPushButton::clicked, [&]() {
         try
         {
-            if (monitoring.load() || requestPending.load())
+            if (requestPending.load())
             {
+                return;
+            }
+            if (monitoring.load())
+            {
+                scanner.stop();
+                scanner.wait();
+                startBtn->setText(QString::fromUtf8("▶"));
+                statusLabel->setText(QString::fromUtf8("已停止"));
+                monitoring.store(false);
                 return;
             }
             QString roomId = roomCombo->currentText().trimmed();

@@ -180,7 +180,7 @@ void StreamQRScanner::processStream()
             sws_scale(pSwsContext, pAVFrame->data, pAVFrame->linesize, 0, pAVFrame->height,
                       dstData, dstLinesize);
 
-            threadPool.start([img = std::move(img), this]() mutable {
+            if (threadPool.tryStart([img = std::move(img), this]() mutable {
                 thread_local QRScanner qrScanners;
                 std::string str;
                 try
@@ -198,7 +198,10 @@ void StreamQRScanner::processStream()
                 }
                 std::lock_guard<std::mutex> lock(m_decodedResultsMutex);
                 m_decodedResults.push_back({ std::move(str), std::move(fingerprint) });
-            });
+            }))
+            {
+                // queued successfully
+            }
             processDecodedResults();
 
             frameCount++;
@@ -212,6 +215,8 @@ void StreamQRScanner::processStream()
         av_frame_unref(pAVFrame);
         av_packet_unref(pAVPacket);
     }
+    threadPool.waitForDone();
+    processDecodedResults();
 }
 
 void StreamQRScanner::processDecodedResults()
@@ -243,9 +248,9 @@ void StreamQRScanner::cleanup()
     pAVPacket = nullptr;
 }
 
-void StreamQRScanner::onDecoded(const QString& content, const QString& fingerprint)
+void StreamQRScanner::onDecoded(std::string content, std::string fingerprint)
 {
-    if (content.isEmpty())
+    if (content.empty())
     {
         if (m_hasActiveQR)
         {
@@ -258,13 +263,12 @@ void StreamQRScanner::onDecoded(const QString& content, const QString& fingerpri
         }
         return;
     }
-    const std::string fp = fingerprint.toStdString();
-    if (fp != m_lastQRTicket)
+    if (fingerprint != m_lastQRTicket)
     {
-        m_lastQRTicket = fp;
+        m_lastQRTicket = std::move(fingerprint);
         m_hasActiveQR = true;
         m_qrCount++;
-        Q_EMIT qrCodeDetected(buildInfo(content.toStdString(), m_streamPlatform, m_roomID));
+        Q_EMIT qrCodeDetected(buildInfo(std::move(content), m_streamPlatform, m_roomID));
     }
 }
 

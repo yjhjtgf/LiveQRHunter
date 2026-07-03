@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QFuture>
 #include <QWidget>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QVBoxLayout>
@@ -298,6 +299,7 @@ int main(int argc, char* argv[])
     // 开始/停止
     std::atomic<bool> monitoring{ false };
     std::atomic<bool> requestPending{ false };
+    QFuture<void> liveInfoFuture;
     QObject::connect(startBtn, &QPushButton::clicked, [&]() {
         try
         {
@@ -338,7 +340,7 @@ int main(int argc, char* argv[])
             QPointer<StreamQRScanner> scannerPtr = &scanner;
             auto monitoringPtr = &monitoring;
             auto requestPendingPtr = &requestPending;
-            QtConcurrent::run([platformIdx, roomIdCopy, statusPtr, startBtnPtr, scannerPtr, monitoringPtr, requestPendingPtr]() {
+            liveInfoFuture = QtConcurrent::run([platformIdx, roomIdCopy, statusPtr, startBtnPtr, scannerPtr, monitoringPtr, requestPendingPtr]() {
                 auto info = GetLiveInfo(static_cast<LivePlatform>(platformIdx), roomIdCopy.toStdString());
                 if (!qApp)
                 {
@@ -396,6 +398,11 @@ int main(int argc, char* argv[])
     w.show();
 
     int ret = a.exec();
+
+    if (liveInfoFuture.isRunning())
+    {
+        liveInfoFuture.waitForFinished();
+    }
 
     saveConfig(&w, platformCombo->currentIndex(), pinBtn->isChecked());
 

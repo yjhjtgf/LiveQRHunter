@@ -42,7 +42,6 @@ private:
     void setStreamHW();
     void cleanup();
 
-    private slots:
     void onDecoded(const QString& content, const QString& fingerprint);
 
     std::string streamUrl{};

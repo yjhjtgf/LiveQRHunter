@@ -57,11 +57,17 @@ jobs:
       - name: Install
         run: cmake --install build --config ${{ env.BUILD_CONFIGURATION }}
 
-      - name: Deploy Qt runtime (windeployqt)
-        run: windeployqt --release --no-translations --no-opengl-sw "${{ github.workspace }}\install\${{ env.PROJECT_NAME }}_${{ env.PROJECT_VERSION }}\${{ env.PROJECT_NAME }}.exe"
-
       - name: Copy ScanModel
         run: Copy-Item -Recurse -Force ScanModel install\${{ env.PROJECT_NAME }}_${{ env.PROJECT_VERSION }}\ScanModel
+
+      - name: Verify Qt runtime deployed
+        run: |
+          $dir = "install\${{ env.PROJECT_NAME }}_${{ env.PROJECT_VERSION }}"
+          $required = @("Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "Qt6Network.dll", "platforms\qwindows.dll")
+          foreach ($f in $required) {
+            if (-not (Test-Path "$dir\$f")) { Write-Error "缺少 Qt 运行库: $f (windeployqt 未生效?)"; exit 1 }
+          }
+          Write-Output "Qt runtime verified OK"
 
       - name: Create ZIP
         run: |

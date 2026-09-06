@@ -95,9 +95,32 @@ install(FILES $<TARGET_PDB_FILE:${PROJECT_NAME}> DESTINATION ${Install_Directory
 # FFmpeg DLLs (windeployqt 不管这些, 仍手工复制)
 install(FILES ${FFMPEG_DLL_FILES} DESTINATION ${Install_Directory})
 
-# Qt DLL 与插件由 windeployqt 部署, 见 CI workflow build.yml 的 Deploy Qt step;
-# 本地可手动执行:
-#   windeployqt --release --no-translations --no-opengl-sw <install>/LiveQRHunter.exe
+# Qt DLL 与插件用 windeployqt 部署(自动补齐间接依赖/插件/运行库)。
+# 让 cmake --install 本身产出自包含目录, 不依赖 CI 额外步骤。
+if(WIN32)
+    find_program(WINDEPLOYQT_EXECUTABLE
+        NAMES windeployqt
+        HINTS "${QT6_INSTALL_PREFIX}/bin"
+        DOC "Qt windeployqt 工具路径"
+    )
+    if(WINDEPLOYQT_EXECUTABLE)
+        # 注意: install(CODE) 内 ${Install_Directory} 在 configure 期展开为绝对路径
+        set(_deploy_exe "${Install_Directory}/${PROJECT_NAME}.exe")
+        install(CODE "
+            execute_process(
+                COMMAND "${WINDEPLOYQT_EXECUTABLE}" --release --no-translations --no-opengl-sw
+                        "${_deploy_exe}"
+                RESULT_VARIABLE _wdq_rc
+                ERROR_VARIABLE _wdq_err
+            )
+            if(NOT \${_wdq_rc} EQUAL 0)
+                message(WARNING "windeployqt 部署 Qt 运行库失败: \${_wdq_err}")
+            endif()
+        ")
+    else()
+        message(WARNING "未找到 windeployqt (Qt6_DIR=${QT6_INSTALL_PREFIX}), 发布包将缺少 Qt 运行库")
+    endif()
+endif()
 
 # Unit tests
 if(UNIT_TESTS)

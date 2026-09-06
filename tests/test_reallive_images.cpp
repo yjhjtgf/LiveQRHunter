@@ -35,19 +35,27 @@ std::vector<std::string> imageFiles()
     return files;
 }
 
-// 与 StreamQRScanner::setStreamHW 相同的降采样策略(当前上限 768x432, 偶数)
+// 与 StreamQRScanner::setStreamHW 相同的降采样策略(长边<=768 且短边>=432, 偶数对齐)
+// 注意: 生产用 sws_scale(BILINEAR), 这里用 cv::resize(INTER_AREA) 近似, 尺寸算法保持一致。
 void downscaleLikeScanner(const cv::Mat& src, cv::Mat& dst)
 {
-    constexpr int kMaxDetectWidth = 768;
-    constexpr int kMaxDetectHeight = 432;
-    int outW = src.cols;
-    int outH = src.rows;
-    if (outW > kMaxDetectWidth || outH > kMaxDetectHeight)
+    constexpr int kMaxDetectLongSide = 768;
+    constexpr int kMinDetectShortSide = 432;
+    const int srcW = src.cols;
+    const int srcH = src.rows;
+    const double longSide = (std::max)(srcW, srcH);
+    const double shortSide = (std::min)(srcW, srcH);
+    double scale = 1.0;
+    if (longSide > kMaxDetectLongSide)
     {
-        const double scale = (std::min)((double)kMaxDetectWidth / outW, (double)kMaxDetectHeight / outH);
-        outW = static_cast<int>(outW * scale);
-        outH = static_cast<int>(outH * scale);
+        scale = (std::min)(scale, kMaxDetectLongSide / longSide);
     }
+    if (shortSide * scale < kMinDetectShortSide && shortSide >= kMinDetectShortSide)
+    {
+        scale = (std::max)(scale, kMinDetectShortSide / shortSide);
+    }
+    int outW = static_cast<int>(srcW * scale);
+    int outH = static_cast<int>(srcH * scale);
     outW -= outW % 2;
     outH -= outH % 2;
     if (outW < 2) outW = 2;
@@ -89,8 +97,7 @@ TEST(RealLiveImages, DetectAfterDownscale)
         ASSERT_FALSE(img.empty()) << "无法读取: " << file;
         cv::Mat small;
         downscaleLikeScanner(img, small);
-        ASSERT_LE(small.cols, 768);
-        ASSERT_LE(small.rows, 432);
+        ASSERT_LE((std::max)(small.cols, small.rows), 768);
         ASSERT_EQ(small.cols % 2, 0);
         ASSERT_EQ(small.rows % 2, 0);
         std::string result;

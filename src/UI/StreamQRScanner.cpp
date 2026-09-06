@@ -1,7 +1,6 @@
 #include "StreamQRScanner.h"
 
 #include <string>
-#include <cstdio>
 #include <algorithm>
 
 #include <QDateTime>
@@ -17,6 +16,7 @@ StreamQRScanner::StreamQRScanner(QObject* parent) :
 
 StreamQRScanner::~StreamQRScanner()
 {
+    m_flushing.store(true);
     if (!this->isInterruptionRequested())
     {
         m_stop.store(false);
@@ -156,17 +156,28 @@ void StreamQRScanner::setStreamHW()
     videoStreamSrcWidth = pAVCodecContext->width;
     videoStreamSrcHeight = pAVCodecContext->height;
 
-    // 降低检测面积以提速: 二维码在画面中通常占比大, 缩到上限内几乎不影响检出
-    int outW = pAVCodecContext->width;
-    int outH = pAVCodecContext->height;
-    if (outW > kMaxDetectWidth || outH > kMaxDetectHeight)
+    // 降低检测面积以提速: 二维码在画面中通常占比大, 缩到上限内几乎不影响检出。
+    // 策略: 长边不超过 kMaxDetectLongSide, 同时短边不低于 kMinDetectShortSide
+    // (避免竖屏/4:3 源被单一高度上限压得过小, 导致二维码过小难以检出)。
+    const int srcW = pAVCodecContext->width;
+    const int srcH = pAVCodecContext->height;
+    const double longSide = (std::max)(srcW, srcH);
+    const double shortSide = (std::min)(srcW, srcH);
+
+    double scale = 1.0;
+    if (longSide > kMaxDetectLongSide)
     {
-        const double scale = (std::min)((double)kMaxDetectWidth / outW, (double)kMaxDetectHeight / outH);
-        outW = static_cast<int>(outW * scale);
-        outH = static_cast<int>(outH * scale);
+        scale = (std::min)(scale, kMaxDetectLongSide / longSide);
     }
-    if (outW % 2 != 0) outW--;
-    if (outH % 2 != 0) outH--;
+    if (shortSide * scale < kMinDetectShortSide && shortSide >= kMinDetectShortSide)
+    {
+        scale = (std::max)(scale, kMinDetectShortSide / shortSide);
+    }
+    int outW = static_cast<int>(srcW * scale);
+    int outH = static_cast<int>(srcH * scale);
+    // 保持偶数(部分编码/缩放要求)
+    outW -= outW % 2;
+    outH -= outH % 2;
     if (outW < 2) outW = 2;
     if (outH < 2) outH = 2;
     videoStreamWidth = outW;
@@ -183,24 +194,6 @@ static QRCodeInfo buildInfo(const std::string& content,
     info.roomID = roomID;
     info.timestamp = QDateTime::currentMSecsSinceEpoch();
     return info;
-}
-
-// 内容指纹: 整个 URL 的定长摘要。避免用"前 N 字符"导致登录码前缀相同被误判为相同。
-static std::string makeQRFingerprint(const std::string& content)
-{
-    if (content.empty())
-    {
-        return {};
-    }
-    std::size_t h = 14695981039346656037ull; // FNV-1a
-    for (unsigned char ch : content)
-    {
-        h ^= ch;
-        h *= 1099511628211ull;
-    }
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%016zx", h);
-    return std::string(buf, 16);
 }
 
 void StreamQRScanner::processStream()
@@ -234,20 +227,30 @@ void StreamQRScanner::processStream()
             }
             if (recvRet < 0)
             {
-                Q_EMIT statusChanged(QString::fromUtf8("直播中断(解码错误)"));
-                break;
+                // 单帧解码错误在直播流中常见(损坏包等), 连续多帧失败才判定中断
+                if (++m_consecutiveDecodeErrors >= 10)
+                {
+                    Q_EMIT statusChanged(QString::fromUtf8("直播中断(连续解码错误)"));
+                    break;
+                }
+                av_frame_unref(pAVFrame);
+                continue;
             }
+            m_consecutiveDecodeErrors = 0;
             frameCount++;
-            // 检测线程全忙时直接丢帧: 直播场景丢帧远好于排队增加延迟
-            const bool poolBusy = threadPool.activeThreadCount() >= threadNumber;
-            if (!poolBusy)
-            {
+            // 送检: 2 个检测线程都在忙时, 先取回已完成结果腾出线程再试一次,
+            // 尽力保证"新二维码出现的那一帧"不被系统性丢弃。
+            auto submitForDecode = [&]() -> bool {
+                if (m_inFlightDecodes.load() >= threadNumber)
+                {
+                    return false;
+                }
+                m_inFlightDecodes.fetch_add(1);
                 cv::Mat img(videoStreamHeight, videoStreamWidth, CV_8UC3);
                 uint8_t* dstData[1] = { img.data };
                 const int dstLinesize[1] = { static_cast<int>(img.step) };
                 sws_scale(pSwsContext, pAVFrame->data, pAVFrame->linesize, 0, pAVFrame->height,
                           dstData, dstLinesize);
-
                 threadPool.start([img = std::move(img), this]() mutable {
                     thread_local QRScanner qrScanners;
                     std::string str;
@@ -257,20 +260,38 @@ void StreamQRScanner::processStream()
                     }
                     catch (...)
                     {
-                        return;
+                        // 单帧解码异常: 按"该帧无码"处理, 保持消失判定状态机推进
+                        str.clear();
                     }
-                    const std::string fingerprint = makeQRFingerprint(str);
-                    std::lock_guard<std::mutex> lock(m_decodedResultsMutex);
-                    m_decodedResults.push_back({ std::move(str), fingerprint });
+                    {
+                        std::lock_guard<std::mutex> lock(m_decodedResultsMutex);
+                        m_decodedResults.push_back({ std::move(str) });
+                    }
+                    m_inFlightDecodes.fetch_sub(1);
                 });
+                return true;
+            };
+
+            bool submitted = submitForDecode();
+            if (!submitted)
+            {
+                // 线程全忙: 先消费已完成结果, 腾出线程再试当前帧
+                processDecodedResults();
+                submitted = submitForDecode();
+            }
+            if (!submitted)
+            {
+                // 极端情况仍忙, 只能丢这一帧(有界, 不堆积)
+                ++m_droppedFrames;
             }
             processDecodedResults();
 
             if (frameCount % 30 == 0)
             {
-                Q_EMIT statusChanged(QString::fromUtf8("已连接 | 帧数: %1 | 二维码: %2")
+                Q_EMIT statusChanged(QString::fromUtf8("已连接 | 帧数: %1 | 二维码: %2 | 丢帧: %3")
                                          .arg(frameCount)
-                                         .arg(m_qrCount));
+                                         .arg(m_qrCount)
+                                         .arg(m_droppedFrames));
             }
             av_frame_unref(pAVFrame);
         }
@@ -286,9 +307,14 @@ void StreamQRScanner::processDecodedResults()
         std::lock_guard<std::mutex> lock(m_decodedResultsMutex);
         pending.swap(m_decodedResults);
     }
+    // 停止后只清空队列, 不再把最后一批结果上报 UI(避免停止后仍弹新码)
+    if (m_flushing.load())
+    {
+        return;
+    }
     for (auto& result : pending)
     {
-        onDecoded(std::move(result.content), std::move(result.fingerprint));
+        onDecoded(std::move(result.content));
     }
 }
 
@@ -308,7 +334,7 @@ void StreamQRScanner::cleanup()
     pAVPacket = nullptr;
 }
 
-void StreamQRScanner::onDecoded(std::string content, std::string fingerprint)
+void StreamQRScanner::onDecoded(std::string content)
 {
     if (content.empty())
     {
@@ -329,17 +355,20 @@ void StreamQRScanner::onDecoded(std::string content, std::string fingerprint)
     }
     // 出现内容: 重置空帧计数
     m_consecutiveEmptyFrames = 0;
-    if (fingerprint != m_lastQRTicket)
+    // 直接整串比较去重(不再用哈希指纹, 彻底消除碰撞漏码)
+    if (content != m_lastQRTicket)
     {
-        m_lastQRTicket = std::move(fingerprint);
+        m_lastQRTicket = std::move(content);
         m_hasActiveQR = true;
         m_qrCount++;
-        Q_EMIT qrCodeDetected(buildInfo(std::move(content), m_streamPlatform, m_roomID));
+        Q_EMIT qrCodeDetected(buildInfo(m_lastQRTicket, m_streamPlatform, m_roomID));
     }
 }
 
 void StreamQRScanner::stop()
 {
+    // 置 flushing: 阻止退出路径把排队结果再上报 UI
+    m_flushing.store(true);
     m_stop.store(false);
 }
 
@@ -347,7 +376,11 @@ void StreamQRScanner::run()
 {
     threadPool.setMaxThreadCount(threadNumber);
     m_stop.store(true);
+    m_flushing.store(false);
+    m_inFlightDecodes.store(0);
     m_qrCount = 0;
+    m_droppedFrames = 0;
+    m_consecutiveDecodeErrors = 0;
     m_hasActiveQR = false;
     m_lastQRTicket.clear();
     m_consecutiveEmptyFrames = 0;

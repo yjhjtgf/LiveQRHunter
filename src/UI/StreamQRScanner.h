@@ -43,7 +43,6 @@ private:
     struct DecodeResult
     {
         std::string content;
-        std::string fingerprint;
     };
 
     void processStream();
@@ -51,7 +50,7 @@ private:
     void setStreamHW();
     void cleanup();
 
-    void onDecoded(std::string content, std::string fingerprint);
+    void onDecoded(std::string content);
 
     std::string streamUrl{};
     AVDictionary* pAvdictionary{};
@@ -66,9 +65,13 @@ private:
     int videoStreamSrcWidth{};
     int videoStreamSrcHeight{};
     int m_consecutiveEmptyFrames{ 0 };
+    int m_consecutiveDecodeErrors{ 0 };
+    std::atomic<int> m_inFlightDecodes{ 0 };
+    std::atomic<bool> m_flushing{ false };
+    int m_droppedFrames{ 0 };
     static constexpr int threadNumber{ 2 };
-    static constexpr int kMaxDetectWidth{ 768 };   // 检测用最大宽度
-    static constexpr int kMaxDetectHeight{ 432 };  // 检测用最大高度
+    static constexpr int kMaxDetectLongSide{ 768 };   // 检测图长边上限
+    static constexpr int kMinDetectShortSide{ 432 };  // 检测图短边下限(仅当原图短边不小于该值时生效)
     static constexpr int kEmptyResultFrameLimit{ 15 }; // 连续 N 帧无码才判定消失
     QThreadPool threadPool;
     std::atomic<bool> m_stop;

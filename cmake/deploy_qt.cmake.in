@@ -1,0 +1,19 @@
+# windeployqt 部署脚本 (由 CMake install 阶段调用)
+# 生成时替换 @WINDEPLOYQT@ 与 @DEPLOY_EXE@ (configure_file)
+
+set(_wdq "@WINDEPLOYQT_TOOL@")
+set(_exe "@DEPLOY_EXE@")
+
+if(NOT EXISTS "${_exe}")
+    message(WARNING "windeployqt 目标不存在: ${_exe}")
+    return()
+endif()
+
+execute_process(
+    COMMAND "${_wdq}" --release --no-translations --no-opengl-sw "${_exe}"
+    RESULT_VARIABLE _wdq_rc
+    ERROR_VARIABLE _wdq_err
+)
+if(NOT _wdq_rc EQUAL 0)
+    message(WARNING "windeployqt 部署 Qt 运行库失败: ${_wdq_err}")
+endif()

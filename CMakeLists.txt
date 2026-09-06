@@ -101,24 +101,19 @@ if(WIN32)
     find_program(WINDEPLOYQT_EXECUTABLE
         NAMES windeployqt
         HINTS "${QT6_INSTALL_PREFIX}/bin"
-        DOC "Qt windeployqt 工具路径"
+        DOC "Qt windeployqt tool"
     )
     if(WINDEPLOYQT_EXECUTABLE)
-        # 注意: install(CODE) 内 ${Install_Directory} 在 configure 期展开为绝对路径
-        set(_deploy_exe "${Install_Directory}/${PROJECT_NAME}.exe")
-        install(CODE "
-            execute_process(
-                COMMAND "${WINDEPLOYQT_EXECUTABLE}" --release --no-translations --no-opengl-sw
-                        "${_deploy_exe}"
-                RESULT_VARIABLE _wdq_rc
-                ERROR_VARIABLE _wdq_err
-            )
-            if(NOT \${_wdq_rc} EQUAL 0)
-                message(WARNING "windeployqt 部署 Qt 运行库失败: \${_wdq_err}")
-            endif()
-        ")
+        set(WINDEPLOYQT_TOOL "${WINDEPLOYQT_EXECUTABLE}")
+        set(DEPLOY_EXE "${Install_Directory}/${PROJECT_NAME}.exe")
+        configure_file(
+            "${CMAKE_CURRENT_LIST_DIR}/cmake/deploy_qt.cmake.in"
+            "${CMAKE_CURRENT_BINARY_DIR}/deploy_qt.cmake"
+            @ONLY
+        )
+        install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/deploy_qt.cmake")
     else()
-        message(WARNING "未找到 windeployqt (Qt6_DIR=${QT6_INSTALL_PREFIX}), 发布包将缺少 Qt 运行库")
+        message(WARNING "windeployqt not found under ${QT6_INSTALL_PREFIX}/bin, release package will miss Qt runtime")
     endif()
 endif()
 

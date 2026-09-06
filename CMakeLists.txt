@@ -92,23 +92,12 @@ set(Install_Directory "${CMAKE_INSTALL_PREFIX}/${PROJECT_NAME}_${PROJECT_VERSION
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION ${Install_Directory})
 install(FILES $<TARGET_PDB_FILE:${PROJECT_NAME}> DESTINATION ${Install_Directory})
 
-set(QT_DLL_FILES
-    ${QT6_INSTALL_PREFIX}/bin/Qt6Core.dll
-    ${QT6_INSTALL_PREFIX}/bin/Qt6Widgets.dll
-    ${QT6_INSTALL_PREFIX}/bin/Qt6Gui.dll
-)
+# FFmpeg DLLs (windeployqt 不管这些, 仍手工复制)
+install(FILES ${FFMPEG_DLL_FILES} DESTINATION ${Install_Directory})
 
-install(FILES ${QT_DLL_FILES} ${FFMPEG_DLL_FILES} DESTINATION ${Install_Directory})
-
-install(FILES
-    ${QT6_INSTALL_PREFIX}/plugins/platforms/qwindows.dll
-    DESTINATION ${Install_Directory}/plugins/platforms
-)
-
-install(FILES
-    ${QT6_INSTALL_PREFIX}/plugins/styles/qmodernwindowsstyle.dll
-    DESTINATION ${Install_Directory}/plugins/styles
-)
+# Qt DLL 与插件由 windeployqt 部署, 见 CI workflow build.yml 的 Deploy Qt step;
+# 本地可手动执行:
+#   windeployqt --release --no-translations --no-opengl-sw <install>/LiveQRHunter.exe
 
 # Unit tests
 if(UNIT_TESTS)

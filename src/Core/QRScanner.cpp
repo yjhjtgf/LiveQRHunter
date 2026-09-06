@@ -1,14 +1,44 @@
-﻿#include "QRScanner.h"
+#include "QRScanner.h"
 
-#define DETECT_PROTOTXT_PATH "./ScanModel/detect.prototxt"
-#define DETECT_CAFFE_MODEL_PATH "./ScanModel/detect.caffemodel"
-#define SR_PROTOTXT_PATH "./ScanModel/sr.prototxt"
-#define SR_CAFFE_MODEL_PATH "./ScanModel/sr.caffemodel"
+#include <windows.h>
+#include <filesystem>
+#include <array>
+
+namespace
+{
+constexpr const char* kModelFiles[] = {
+    "ScanModel/detect.prototxt",
+    "ScanModel/detect.caffemodel",
+    "ScanModel/sr.prototxt",
+    "ScanModel/sr.caffemodel",
+};
+
+std::filesystem::path scanModelDir()
+{
+    wchar_t buf[MAX_PATH];
+    const DWORD len = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (len > 0 && len < MAX_PATH)
+    {
+        std::filesystem::path exePath(buf);
+        auto candidate = exePath.parent_path() / "ScanModel";
+        if (std::filesystem::exists(candidate / kModelFiles[0]))
+        {
+            return candidate;
+        }
+    }
+    return std::filesystem::current_path() / "ScanModel";
+}
+} // namespace
 
 QRScanner::QRScanner()
 {
-    detector = cv::makePtr<cv::wechat_qrcode::WeChatQRCode>(DETECT_PROTOTXT_PATH, DETECT_CAFFE_MODEL_PATH,
-                                                            SR_PROTOTXT_PATH, SR_CAFFE_MODEL_PATH);
+    const auto modelDir = scanModelDir();
+    const auto detectProto = (modelDir / "detect.prototxt").string();
+    const auto detectModel = (modelDir / "detect.caffemodel").string();
+    const auto srProto = (modelDir / "sr.prototxt").string();
+    const auto srModel = (modelDir / "sr.caffemodel").string();
+    detector = cv::makePtr<cv::wechat_qrcode::WeChatQRCode>(
+        detectProto, detectModel, srProto, srModel);
     detector->setScaleFactor(0.4);
 }
 

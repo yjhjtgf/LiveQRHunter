@@ -63,7 +63,13 @@ private:
     int videoStreamIndex{ 0 };
     int videoStreamWidth{};
     int videoStreamHeight{};
-    const int threadNumber{ 2 };
+    int videoStreamSrcWidth{};
+    int videoStreamSrcHeight{};
+    int m_consecutiveEmptyFrames{ 0 };
+    static constexpr int threadNumber{ 2 };
+    static constexpr int kMaxDetectWidth{ 768 };   // 检测用最大宽度
+    static constexpr int kMaxDetectHeight{ 432 };  // 检测用最大高度
+    static constexpr int kEmptyResultFrameLimit{ 15 }; // 连续 N 帧无码才判定消失
     QThreadPool threadPool;
     std::atomic<bool> m_stop;
     std::string m_streamPlatform;

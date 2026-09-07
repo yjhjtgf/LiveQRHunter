@@ -92,23 +92,30 @@ set(Install_Directory "${CMAKE_INSTALL_PREFIX}/${PROJECT_NAME}_${PROJECT_VERSION
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION ${Install_Directory})
 install(FILES $<TARGET_PDB_FILE:${PROJECT_NAME}> DESTINATION ${Install_Directory})
 
-set(QT_DLL_FILES
-    ${QT6_INSTALL_PREFIX}/bin/Qt6Core.dll
-    ${QT6_INSTALL_PREFIX}/bin/Qt6Widgets.dll
-    ${QT6_INSTALL_PREFIX}/bin/Qt6Gui.dll
-)
+# FFmpeg DLLs (windeployqt 不管这些, 仍手工复制)
+install(FILES ${FFMPEG_DLL_FILES} DESTINATION ${Install_Directory})
 
-install(FILES ${QT_DLL_FILES} ${FFMPEG_DLL_FILES} DESTINATION ${Install_Directory})
-
-install(FILES
-    ${QT6_INSTALL_PREFIX}/plugins/platforms/qwindows.dll
-    DESTINATION ${Install_Directory}/plugins/platforms
-)
-
-install(FILES
-    ${QT6_INSTALL_PREFIX}/plugins/styles/qmodernwindowsstyle.dll
-    DESTINATION ${Install_Directory}/plugins/styles
-)
+# Qt DLL 与插件用 windeployqt 部署(自动补齐间接依赖/插件/运行库)。
+# 让 cmake --install 本身产出自包含目录, 不依赖 CI 额外步骤。
+if(WIN32)
+    find_program(WINDEPLOYQT_EXECUTABLE
+        NAMES windeployqt
+        HINTS "${QT6_INSTALL_PREFIX}/bin"
+        DOC "Qt windeployqt tool"
+    )
+    if(WINDEPLOYQT_EXECUTABLE)
+        set(WINDEPLOYQT_TOOL "${WINDEPLOYQT_EXECUTABLE}")
+        set(DEPLOY_EXE "${Install_Directory}/${PROJECT_NAME}.exe")
+        configure_file(
+            "${CMAKE_CURRENT_LIST_DIR}/cmake/deploy_qt.cmake.in"
+            "${CMAKE_CURRENT_BINARY_DIR}/deploy_qt.cmake"
+            @ONLY
+        )
+        install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/deploy_qt.cmake")
+    else()
+        message(WARNING "windeployqt not found under ${QT6_INSTALL_PREFIX}/bin, release package will miss Qt runtime")
+    endif()
+endif()
 
 # Unit tests
 if(UNIT_TESTS)

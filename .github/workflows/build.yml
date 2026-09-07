@@ -4,12 +4,15 @@ on:
   push:
     branches: [ "main" ]
     tags: ["v*"]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 env:
   BUILD_CONFIGURATION: Release
   PROJECT_NAME: LiveQRHunter
   PROJECT_VERSION: 1.0.1
+  VCPKG_TARGET_TRIPLET: x64-windows-static-md
 
 permissions:
   contents: write
@@ -35,7 +38,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/vcpkg-cache
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-${{ runner.os }}-${{ env.VCPKG_TARGET_TRIPLET }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
             vcpkg-${{ runner.os }}-
 
@@ -47,7 +50,7 @@ jobs:
           cmake -B build `
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIGURATION }} `
           -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}\scripts\buildsystems\vcpkg.cmake `
-          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
+          -DVCPKG_TARGET_TRIPLET=${{ env.VCPKG_TARGET_TRIPLET }} `
           -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}\install
 
       - name: Build
@@ -59,15 +62,28 @@ jobs:
       - name: Copy ScanModel
         run: Copy-Item -Recurse -Force ScanModel install\${{ env.PROJECT_NAME }}_${{ env.PROJECT_VERSION }}\ScanModel
 
+      - name: Verify Qt runtime deployed
+        run: |
+          $dir = "install\${{ env.PROJECT_NAME }}_${{ env.PROJECT_VERSION }}"
+          $required = @("Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "Qt6Network.dll", "platforms\qwindows.dll")
+          foreach ($f in $required) {
+            if (-not (Test-Path "$dir\$f")) { Write-Error "缺少 Qt 运行库: $f (windeployqt 未生效?)"; exit 1 }
+          }
+          Write-Output "Qt runtime verified OK"
+
       - name: Create ZIP
         run: |
-          Compress-Archive -Path "install\${{ env.PROJECT_NAME }}_${{ env.PROJECT_VERSION }}\*" -DestinationPath "${{ env.PROJECT_NAME }}_${{ github.ref_name }}.zip"
+          $zipName = "${{ env.PROJECT_NAME }}_${{ github.sha }}.zip"
+          $dir = "install\${{ env.PROJECT_NAME }}_${{ env.PROJECT_VERSION }}"
+          if (-not (Test-Path $dir)) { Write-Error "install dir missing: $dir"; exit 1 }
+          Compress-Archive -Path "$dir\*" -DestinationPath $zipName -CompressionLevel Optimal
+          Write-Output "ZIP created: $zipName ($((Get-Item $zipName).Length) bytes)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PROJECT_NAME }}_${{ github.ref_name }}
-          path: ${{ env.PROJECT_NAME }}_${{ github.ref_name }}.zip
+          name: ${{ env.PROJECT_NAME }}_${{ github.sha }}
+          path: ${{ env.PROJECT_NAME }}_${{ github.sha }}.zip
           retention-days: 5
 
       - name: Create GitHub Release
@@ -75,6 +91,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          files: ${{ env.PROJECT_NAME }}_${{ github.ref_name }}.zip
+          files: ${{ env.PROJECT_NAME }}_${{ github.sha }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

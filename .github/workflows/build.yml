@@ -73,13 +73,17 @@ jobs:
 
       - name: Create ZIP
         run: |
-          Compress-Archive -Path "install\${{ env.PROJECT_NAME }}_${{ env.PROJECT_VERSION }}\*" -DestinationPath "${{ env.PROJECT_NAME }}_${{ github.ref_name }}.zip"
+          $zipName = "${{ env.PROJECT_NAME }}_${{ github.sha }}.zip"
+          $dir = "install\${{ env.PROJECT_NAME }}_${{ env.PROJECT_VERSION }}"
+          if (-not (Test-Path $dir)) { Write-Error "install dir missing: $dir"; exit 1 }
+          Compress-Archive -Path "$dir\*" -DestinationPath $zipName -CompressionLevel Optimal
+          Write-Output "ZIP created: $zipName ($((Get-Item $zipName).Length) bytes)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PROJECT_NAME }}_${{ github.ref_name }}
-          path: ${{ env.PROJECT_NAME }}_${{ github.ref_name }}.zip
+          name: ${{ env.PROJECT_NAME }}_${{ github.sha }}
+          path: ${{ env.PROJECT_NAME }}_${{ github.sha }}.zip
           retention-days: 5
 
       - name: Create GitHub Release
@@ -87,6 +91,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          files: ${{ env.PROJECT_NAME }}_${{ github.ref_name }}.zip
+          files: ${{ env.PROJECT_NAME }}_${{ github.sha }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

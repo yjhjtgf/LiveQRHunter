@@ -8,10 +8,14 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   BUILD_CONFIGURATION: Release
   PROJECT_NAME: LiveQRHunter
-  PROJECT_VERSION: 1.0.1
+  PROJECT_VERSION: 1.1.0
   VCPKG_TARGET_TRIPLET: x64-windows-static-md
 
 permissions:

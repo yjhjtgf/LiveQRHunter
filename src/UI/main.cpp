@@ -54,7 +54,6 @@ static void saveQRHistory(QListWidget* list, nlohmann::json& historyData)
         });
     }
     historyData["qr_history"] = arr;
-    saveHistoryFile(historyData);
 }
 
 static void loadQRHistory(QListWidget* list, const nlohmann::json& historyData)
@@ -75,7 +74,6 @@ static void saveRoomHistory(QComboBox* combo, nlohmann::json& historyData)
     for (int i = 0; i < combo->count(); i++)
         arr.push_back(combo->itemText(i).toStdString());
     historyData["room_history"] = arr;
-    saveHistoryFile(historyData);
 }
 
 static void loadRoomHistory(QComboBox* combo, const nlohmann::json& historyData)
@@ -224,13 +222,26 @@ int main(int argc, char* argv[])
         text += QString::fromUtf8("内容: ") + QString::fromStdString(info.rawContent).left(80) + "...";
         infoLabel->setText(text);
 
-        // 历史记录 (最多100条)
-        QString entry = dt.toString("HH:mm:ss") + "  " + QString::fromStdString(info.rawContent).left(50);
+        // 历史记录 (最多100条, 按内容去重)
+        const QString content = QString::fromStdString(info.rawContent);
+        const QString entry = dt.toString("HH:mm:ss") + "  " + content.left(50);
+        for (int i = 0; i < historyList->count(); ++i)
+        {
+            if (historyList->item(i)->data(Qt::UserRole).toString() == content)
+            {
+                // 已存在: 移到最前并更新时间戳前缀
+                auto* item = historyList->takeItem(i);
+                delete item;
+                break;
+            }
+        }
         historyList->insertItem(0, entry);
-        historyList->item(0)->setData(Qt::UserRole, QString::fromStdString(info.rawContent));
-        if (historyList->count() > 100)
+        historyList->item(0)->setData(Qt::UserRole, content);
+        while (historyList->count() > 100)
+        {
             delete historyList->takeItem(historyList->count() - 1);
-        saveQRHistory(historyList, historyData);
+        }
+        // 不再每帧全量写盘: 由程序退出时统一保存(见 main 末尾 saveHistory)
     });
 
     // 点击历史条目 → 显示二维码
@@ -409,6 +420,10 @@ int main(int argc, char* argv[])
         liveInfoFuture.waitForFinished();
     }
 
+    // 退出前统一落盘历史与配置(此前只更新内存)
+    saveQRHistory(historyList, historyData);
+    saveRoomHistory(roomCombo, historyData);
+    saveHistoryFile(historyData);
     saveConfig(&w, platformCombo->currentIndex(), pinBtn->isChecked());
 
     return ret;
